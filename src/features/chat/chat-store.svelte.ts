@@ -7,6 +7,7 @@ import {
   type Agent,
   type AttachmentMeta,
   type ChatSummary,
+  type PickedAttachments,
   type RunEvent,
   type RunStarted,
   type StoredMessage,
@@ -15,6 +16,7 @@ import { applyRunEvent, emptyTurn, isTerminal, type AssistantTurn, type TurnSegm
 import type { ToolCallStatus } from "$lib/ipc/commands";
 import { providerStore } from "$features/providers/provider-store.svelte";
 import { agentStore } from "$features/agents/agent-store.svelte";
+import { nav } from "$lib/state/nav.svelte";
 
 export interface UserTurn {
   kind: "user";
@@ -152,6 +154,8 @@ class ChatStore {
         void this.refresh(chat);
       }
     });
+    // Files dropped on the window arrive already imported by Rust.
+    await listen<PickedAttachments>("attachments-dropped", (e) => this.onDropped(e.payload));
   }
 
   private upsert(summary: ChatSummary): Chat {
@@ -253,18 +257,42 @@ class ChatStore {
 
   async pickAttachments(chat: Chat) {
     try {
-      const picked = await commands.pickAttachments(this.supportsImages(chat));
-      for (const a of picked.attached) if (!chat.pending.some((p) => p.id === a.id)) chat.pending.push(a);
-      if (picked.rejected.length) {
-        this.error = picked.rejected.map((r) => `${r.name}: ${r.reason}`).join("\n");
-      }
+      const images = this.supportsImages(chat);
+      this.mergePicked(chat, await commands.pickAttachments(images), images);
     } catch (e) {
       this.error = describeError(e);
     }
   }
 
+  /** Adds imported files to the chat's pending list (deduped by id) and reports rejections.
+   * With `images` false, image attachments join the rejection notice instead of pending. */
+  private mergePicked(chat: Chat, picked: PickedAttachments, images: boolean) {
+    const rejected = picked.rejected.map((r) => `${r.name}: ${r.reason}`);
+    for (const a of picked.attached) {
+      if (!images && a.mime.startsWith("image/")) {
+        rejected.push(`${a.name}: the selected model does not accept image attachments`);
+      } else if (!chat.pending.some((p) => p.id === a.id)) {
+        chat.pending.push(a);
+      }
+    }
+    if (rejected.length) this.error = rejected.join("\n");
+  }
+
   removePending(chat: Chat, id: string) {
     chat.pending = chat.pending.filter((a) => a.id !== id);
+  }
+
+  /** Native file drop, imported by Rust. Merges into the visible chat's pending list like a
+   * picker result; drops elsewhere (agents view, an open dialog) are ignored with a notice.
+   * Rust can't see the visible chat's model, so the image gate is applied here — images the
+   * model can't accept join the rejection notice instead of pending. */
+  private onDropped(picked: PickedAttachments) {
+    const chat = this.active;
+    if (!chat || nav.view.kind !== "chat" || nav.modal !== null) {
+      this.error = "Files can only be dropped onto an open chat.";
+      return;
+    }
+    this.mergePicked(chat, picked, this.supportsImages(chat));
   }
 
   async send(chat: Chat, prompt: string, replaceFrom: string | null = null) {
