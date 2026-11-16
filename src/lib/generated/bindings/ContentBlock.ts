@@ -6,7 +6,15 @@ import type { ToolCallStatus } from "./ToolCallStatus";
  * signatures, etc.) is preserved verbatim in `ProviderOpaque` so it can be replayed to the
  * same provider and never leaked to a different one.
  */
-export type ContentBlock = { "type": "text", text: string, } | { "type": "thinking", text: string, } | { "type": "attachment", id: string, name: string, mime: string, char_count: number, } | { "type": "image", mime: string, data: string, } | { "type": "tool_call", id: string, 
+export type ContentBlock = { "type": "text", text: string, } | { "type": "thinking", text: string, } | { "type": "attachment", id: string, name: string, mime: string, char_count: number, 
+/**
+ * PDFs only: pages in the document. Absent from blocks stored before PDF support.
+ */
+page_count: number | null, 
+/**
+ * PDFs only: leading pages sent as images when the message was sent.
+ */
+pages_rendered: number | null, } | { "type": "image", mime: string, data: string, } | { "type": "tool_call", id: string, 
 /**
  * Name exposed to the model.
  */

@@ -54,7 +54,7 @@ https://github.com/user-attachments/assets/e552658e-231b-44a2-97c2-7181deb878e3
   selection into an agent; run it on demand or once / every N minutes / on chosen weekdays,
   with catch-up handling for runs missed while the app was closed.
 - **Polished chat.** Token-by-token streaming, sanitized Markdown with code highlighting and
-  KaTeX math, file and image attachments, search, and recovery of interrupted runs.
+  KaTeX math, file, image and PDF attachments, search, and recovery of interrupted runs.
 - **Small, fast, local.** A ~6 MiB app on the OS webview. Data lives in `~/.opengent`, secrets in
   the macOS Keychain / Windows Credential Manager, and there is no telemetry.
 
@@ -174,6 +174,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how proposals are approved.
   Anthropic built-in tools or prompt caching yet). The remaining native adapters — xAI
   first — arrive during [Phase 5](#native-providers).
 - Scheduled runs only fire while the app is open.
+- PDFs are rendered inside the app's process by the OS renderer, not in a sandboxed helper,
+  and its time budget is only checked between pages (see [SECURITY.md](SECURITY.md)).
+- Attachments are never deleted from disk, even when their chat is.
 - Installers are unsigned, so macOS and Windows warn on first launch (see [Install](#install)).
 
 ## Security

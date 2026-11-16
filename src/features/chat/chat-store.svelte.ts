@@ -7,6 +7,7 @@ import {
   type Agent,
   type AttachmentMeta,
   type ChatSummary,
+  type ImportProgress,
   type PickedAttachments,
   type RunEvent,
   type RunStarted,
@@ -17,12 +18,20 @@ import type { ToolCallStatus } from "$lib/ipc/commands";
 import { providerStore } from "$features/providers/provider-store.svelte";
 import { agentStore } from "$features/agents/agent-store.svelte";
 import { nav } from "$lib/state/nav.svelte";
+import { blockedReason } from "$lib/attachments";
 
 export interface UserTurn {
   kind: "user";
   id: string;
   text: string;
-  attachments: { id: string; name: string; mime: string; char_count: number }[];
+  attachments: {
+    id: string;
+    name: string;
+    mime: string;
+    char_count: number;
+    page_count: number | null;
+    pages_rendered: number | null;
+  }[];
 }
 export interface AssistantTurnItem {
   kind: "assistant";
@@ -51,7 +60,14 @@ function fromStored(m: StoredMessage): TurnItem {
       .join("\n");
     const attachments = m.blocks
       .filter((b): b is Extract<typeof b, { type: "attachment" }> => b.type === "attachment")
-      .map((b) => ({ id: b.id, name: b.name, mime: b.mime, char_count: b.char_count }));
+      .map((b) => ({
+        id: b.id,
+        name: b.name,
+        mime: b.mime,
+        char_count: b.char_count,
+        page_count: b.page_count ?? null,
+        pages_rendered: b.pages_rendered ?? null,
+      }));
     return { kind: "user", id: m.id, text, attachments };
   }
   const segments: TurnSegment[] = [];
@@ -106,6 +122,8 @@ class ChatStore {
   activeId = $state<string | null>(null);
   query = $state("");
   error = $state<string | null>(null);
+  /** PDFs being rendered for a pick or drop, or null; shown in the composer. */
+  importing = $state<ImportProgress | null>(null);
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private listening = false;
 
@@ -156,6 +174,9 @@ class ChatStore {
     });
     // Files dropped on the window arrive already imported by Rust.
     await listen<PickedAttachments>("attachments-dropped", (e) => this.onDropped(e.payload));
+    await listen<ImportProgress>("attachments-importing", (e) => {
+      this.importing = e.payload.name === null ? null : e.payload;
+    });
   }
 
   private upsert(summary: ChatSummary): Chat {
@@ -257,20 +278,23 @@ class ChatStore {
 
   async pickAttachments(chat: Chat) {
     try {
-      const images = this.supportsImages(chat);
-      this.mergePicked(chat, await commands.pickAttachments(images), images);
+      this.mergePicked(chat, await commands.pickAttachments(this.supportsImages(chat)));
     } catch (e) {
       this.error = describeError(e);
     }
   }
 
   /** Adds imported files to the chat's pending list (deduped by id) and reports rejections.
-   * With `images` false, image attachments join the rejection notice instead of pending. */
-  private mergePicked(chat: Chat, picked: PickedAttachments, images: boolean) {
+   * Picks are already gated by Rust; drops are not (Rust can't see the visible chat's
+   * model), so files the chat's model can't be sent (images and PDFs on a text-only model)
+   * join the rejection notice here instead of pending. */
+  private mergePicked(chat: Chat, picked: PickedAttachments) {
+    const caps = { images: this.supportsImages(chat) };
     const rejected = picked.rejected.map((r) => `${r.name}: ${r.reason}`);
     for (const a of picked.attached) {
-      if (!images && a.mime.startsWith("image/")) {
-        rejected.push(`${a.name}: the selected model does not accept image attachments`);
+      const reason = blockedReason(a, caps);
+      if (reason) {
+        rejected.push(`${a.name}: ${reason}`);
       } else if (!chat.pending.some((p) => p.id === a.id)) {
         chat.pending.push(a);
       }
@@ -283,16 +307,14 @@ class ChatStore {
   }
 
   /** Native file drop, imported by Rust. Merges into the visible chat's pending list like a
-   * picker result; drops elsewhere (agents view, an open dialog) are ignored with a notice.
-   * Rust can't see the visible chat's model, so the image gate is applied here — images the
-   * model can't accept join the rejection notice instead of pending. */
+   * picker result; drops elsewhere (agents view, an open dialog) are ignored with a notice. */
   private onDropped(picked: PickedAttachments) {
     const chat = this.active;
     if (!chat || nav.view.kind !== "chat" || nav.modal !== null) {
       this.error = "Files can only be dropped onto an open chat.";
       return;
     }
-    this.mergePicked(chat, picked, this.supportsImages(chat));
+    this.mergePicked(chat, picked);
   }
 
   async send(chat: Chat, prompt: string, replaceFrom: string | null = null) {
@@ -312,7 +334,14 @@ class ChatStore {
         kind: "user",
         id: `local-${crypto.randomUUID()}`,
         text,
-        attachments: chat.pending.map((a) => ({ id: a.id, name: a.name, mime: a.mime, char_count: a.char_count })),
+        attachments: chat.pending.map((a) => ({
+          id: a.id,
+          name: a.name,
+          mime: a.mime,
+          char_count: a.char_count,
+          page_count: a.page_count,
+          pages_rendered: a.page_count === null ? null : a.pages_rendered,
+        })),
       },
       { kind: "assistant", id: `local-${crypto.randomUUID()}`, model: selection?.model ?? "", turn: emptyTurn() },
     );
@@ -402,7 +431,16 @@ class ChatStore {
     if (!last || last.kind !== "assistant" || !prev || prev.kind !== "user" || chat.activeRunId) return;
     const replaceFrom = prev.id.startsWith("local-") ? null : prev.id;
     chat.items.splice(-2, 2);
-    chat.pending = prev.attachments.map((a) => ({ id: a.id, name: a.name, char_count: a.char_count, sha256: "", mime: a.mime, size_bytes: 0 }));
+    chat.pending = prev.attachments.map((a) => ({
+      id: a.id,
+      name: a.name,
+      char_count: a.char_count,
+      sha256: "",
+      mime: a.mime,
+      size_bytes: 0,
+      page_count: a.page_count,
+      pages_rendered: a.pages_rendered ?? 0,
+    }));
     await this.send(chat, prev.text, replaceFrom);
   }
 

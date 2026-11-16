@@ -33,12 +33,20 @@ pub enum ContentBlock {
         mime: String,
         #[ts(type = "number")]
         char_count: i64,
+        /// PDFs only: pages in the document. Absent from blocks stored before PDF support.
+        #[serde(default)]
+        page_count: Option<u32>,
+        /// PDFs only: leading pages sent as images when the message was sent.
+        #[serde(default)]
+        pages_rendered: Option<u32>,
     },
     /// An image ready to send to a vision-capable provider (`data` is base64). Produced by
     /// context compilation for the request path only — never persisted in message blocks.
+    /// Shared, not copied, from the attachment payloads it was compiled from.
     Image {
         mime: String,
-        data: String,
+        #[ts(type = "string")]
+        data: std::sync::Arc<str>,
     },
     /// A model-requested tool call. Assistant messages interleave text, calls and their
     /// results in stream order, so one stored message holds a whole multi-step run.
