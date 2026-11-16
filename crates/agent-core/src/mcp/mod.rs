@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod manager;
+mod oauth;
 pub mod permissions;
 pub mod stdio;
 
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rmcp::model::{ClientCapabilities, ClientConfig, Implementation};
+use rmcp::model::{ClientCapabilities, ClientConfig, Implementation, ProtocolVersion};
 use rmcp::transport::TokioChildProcess;
 use rmcp::ServiceExt;
 use serde::{Deserialize, Serialize};
@@ -19,8 +20,8 @@ use ts_rs::TS;
 use crate::{config::product, Error, Result};
 
 pub use config::{
-    split_command, KeyValueEntry, KeyValueInput, McpServerConfig, McpServerInput, McpStore,
-    McpTransport,
+    split_command, KeyValueEntry, KeyValueInput, McpAuth, McpAuthInput, McpServerConfig,
+    McpServerInput, McpStore, McpTransport,
 };
 pub use manager::{
     McpManager, McpServerStatus, McpServerView, ScopedServerView, ScopedToolView, ToolInfo,
@@ -59,6 +60,11 @@ pub(crate) fn client_config() -> ClientConfig {
         ClientCapabilities::default(),
         Implementation::new(product().slug, product().version).with_title(product().display_name),
     )
+    // Advertise the newest spec revision that still has an `initialize` handshake.
+    // rmcp's default is a later draft revision without `initialize`; servers that
+    // negotiate down instead of rejecting can then produce unusable sessions
+    // (github-mcp-server answers every later request with `400 invalid session`).
+    .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
 }
 
 /// Spawns the server, performs the MCP handshake, lists tools, and shuts the server down.

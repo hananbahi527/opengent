@@ -14,6 +14,21 @@ under *Unreleased*.
 
 ## Unreleased
 
+### Added
+
+- **Tools**: Remote MCP connections can sign in with OAuth in your browser (authorization
+  code + PKCE, with automatic client registration or your own client ID), or use OAuth
+  client credentials. Tokens stay in the OS credential store and refresh on their own.
+
+### Fixed
+
+- **Tools**: A remote server that needs authentication now shows a short message saying what
+  to do instead of a raw transport error, and long errors no longer overflow the Connections
+  dialog.
+- **Tools**: Remote MCP servers such as GitHub's (`api.githubcopilot.com/mcp`) now connect —
+  they negotiate the session down from the protocol version the client advertised and then
+  rejected every request, so a valid PAT reported only "Transport channel closed".
+
 ## 0.1.2 — 2026-11-15
 
 ### Fixed

@@ -60,7 +60,8 @@
     if (!s.enabled || !inScope(s)) return "off";
     switch (s.status.kind) {
       case "connected": return "ok";
-      case "connecting": return "busy";
+      case "connecting":
+      case "authorizing": return "busy";
       case "failed": return "bad";
       default: return "off";
     }
@@ -81,6 +82,8 @@
       }
       case "connecting": return "connecting…";
       case "failed": return "failed";
+      case "needs_auth": return "sign-in required";
+      case "authorizing": return "signing in…";
       default: return "idle";
     }
   }
@@ -358,6 +361,7 @@
     border-radius: var(--radius-md);
     background: var(--bg);
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 4px;
   }
   .def {
@@ -387,9 +391,7 @@
   .tname {
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
   .warn {
     flex: none;
