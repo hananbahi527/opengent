@@ -34,6 +34,7 @@ use super::oauth::{
     LoopbackCallback,
 };
 use super::permissions::{PermissionScope, PinSource, ScopePolicies};
+use super::server_meta::{InstructionsStatus, ServerIcon, ServerInstructions, ServerMeta};
 use super::{client_config, StdioServerSpec};
 use crate::agent::context::{estimate_tokens, tools_prompt, ServerBrief};
 use crate::agent::tools::{
@@ -129,6 +130,11 @@ pub struct McpServerView {
     pub config: McpServerConfig,
     pub status: McpServerStatus,
     pub server_info: Option<String>,
+    /// The server's own display title (handshake; last seen when offline). Untrusted.
+    pub server_title: Option<String>,
+    pub icon: Option<ServerIcon>,
+    /// The server's handshake instructions and whether they go into the system prompt.
+    pub instructions: Option<ServerInstructions>,
     pub tools: Vec<ToolInfo>,
     /// `tools` is the last list seen (server disabled, offline or failed), not live.
     pub tools_cached: bool,
@@ -142,7 +148,7 @@ struct Live {
     service: Service,
     tools: Mutex<Vec<rmcp::model::Tool>>,
     server_info: String,
-    instructions: Option<String>,
+    meta: ServerMeta,
     stderr: Arc<Mutex<VecDeque<String>>>,
 }
 
@@ -691,7 +697,18 @@ impl McpManager {
                         }
                     })
                     .collect();
+                let meta = live
+                    .map(|l| l.meta.clone())
+                    .or_else(|| self.store.server_meta(&config.id))
+                    .unwrap_or_default();
+                let instructions = meta.instructions.as_ref().map(|text| ServerInstructions {
+                    status: self.store.instructions_status(&config.id, meta.signature()),
+                    text: text.clone(),
+                });
                 McpServerView {
+                    server_title: meta.title,
+                    icon: meta.icon,
+                    instructions,
                     tools_cached: live.is_none(),
                     status: if config.enabled {
                         inner
@@ -810,6 +827,9 @@ impl McpManager {
                     self.record_catalog(id, &tools);
                     tools.len() as u32
                 };
+                if let Err(e) = self.store.set_server_meta(id, live.meta.clone()) {
+                    tracing::warn!(error = %e, "failed to persist server metadata");
+                }
                 {
                     let mut inner = self.inner.lock().expect("mcp lock");
                     inner.live.insert(id.to_owned(), Arc::clone(&live));
@@ -1498,19 +1518,21 @@ impl McpManager {
             return Err(superseded());
         }
         let info = service.peer_info();
-        let server_info = info
-            .as_ref()
-            .and_then(|i| i.server_info.as_ref())
+        let server_impl = info.as_ref().and_then(|i| i.server_info.as_ref());
+        let server_info = server_impl
             .map(|s| format!("{} {}", s.name, s.version))
             .unwrap_or_else(|| config.name.clone());
-        let instructions = info.as_ref().and_then(|i| i.instructions.clone());
+        let meta = ServerMeta::from_handshake(
+            server_impl,
+            info.as_ref().and_then(|i| i.instructions.as_deref()),
+        );
 
         Ok(Established {
             live: Live {
                 service,
                 tools: Mutex::new(tools),
                 server_info,
-                instructions,
+                meta,
                 stderr,
             },
             tool_changed_rx,
@@ -1621,10 +1643,19 @@ impl McpManager {
                 {
                     continue;
                 }
+                // Untrusted guidance: only the accepted version, and only for a server
+                // whose tools this run can actually call.
+                let instructions = live.meta.instructions.clone().filter(|_| {
+                    count > 0
+                        && self
+                            .store
+                            .instructions_status(&config.id, live.meta.signature())
+                            == InstructionsStatus::Included
+                });
                 briefs.push(ServerBrief {
                     name: config.name.clone(),
                     tool_count: count,
-                    instructions: live.instructions.clone(),
+                    instructions,
                     disabled,
                     disabled_extra,
                 });
