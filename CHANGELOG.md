@@ -26,6 +26,10 @@ under *Unreleased*.
   they can answer date and time questions — in chats, agents and scheduled runs. On by
   default; turn it off with *Share environment with models* in *Settings → General*.
 
+- **Platform**: Settings → Appearance lets you keep the app in light or dark mode regardless
+  of the OS setting, or follow the system (the default). The change applies immediately and
+  is remembered.
+
 - **Providers**: xAI (Grok) is a native provider type: add a connection with an xAI Console
   API key and pick from the models your key can call, with vision and reasoning flags taken
   from xAI's model listing. Runs use the Responses API statelessly (`store: false`), stream
