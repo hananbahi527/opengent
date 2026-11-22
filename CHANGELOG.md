@@ -22,6 +22,12 @@ under *Unreleased*.
   replies and tool calls, and replay each turn's encrypted reasoning items from local
   storage so Grok keeps its earlier thinking across turns and tool calls.
 
+### Changed
+
+- **Chat**: Replies use more of the width in large or maximized windows and on high-resolution
+  screens, so code and tables have more room. The default-size layout and the message box are
+  unchanged.
+
 ## 0.2.2 — 2026-11-21
 
 ### Fixed
