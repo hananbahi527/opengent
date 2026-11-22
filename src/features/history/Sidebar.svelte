@@ -5,6 +5,7 @@
   import { chatStore } from "$features/chat/chat-store.svelte";
   import { agentStore } from "$features/agents/agent-store.svelte";
   import { nav } from "$lib/state/nav.svelte";
+  import { modKey } from "$lib/platform";
 
   async function openChat(id: string) {
     nav.showChat();
@@ -16,7 +17,7 @@
     await chatStore.newChat();
   }
 
-  let { appInfo, onopensettings, onopenconnections }: { appInfo: AppInfo | null; onopensettings: () => void; onopenconnections: () => void } = $props();
+  let { appInfo }: { appInfo: AppInfo | null } = $props();
 
   const groups = $derived.by(() => {
     const now = Date.now();
@@ -41,9 +42,9 @@
     <span class="name">{product.displayName}</span>
   </header>
 
-  <button class="new-chat" onclick={newChat} title="New chat (⌘N / Ctrl+N)">
+  <button class="new-chat" onclick={newChat} title="New chat ({modKey}N)">
     <span class="plus" aria-hidden="true">+</span> New chat
-    <kbd>⌘N</kbd>
+    <kbd>{modKey}N</kbd>
   </button>
 
   <button
@@ -96,11 +97,15 @@
   </div>
 
   <footer class="foot">
-    <button class="settings" onclick={onopensettings} title="Providers & settings (⌘,)">
-      <span aria-hidden="true">⚙</span> Providers
+    <button class="settings" onclick={() => nav.openSettings()} title="Settings ({modKey},)">
+      <span class="ico gear" aria-hidden="true">{"⚙︎"}</span> Settings
+      <kbd>{modKey},</kbd>
     </button>
-    <button class="settings" onclick={onopenconnections} title="MCP tool servers">
-      <span aria-hidden="true">⚒</span> Connections
+    <button class="settings" onclick={() => nav.openSettings("providers")} title="Model providers">
+      <span class="ico" aria-hidden="true">◎</span> Providers
+    </button>
+    <button class="settings" onclick={() => nav.openSettings("connections")} title="MCP tool servers">
+      <span class="ico" aria-hidden="true">⚒</span> Connections
     </button>
     {#if appInfo}
       <div class="status" title={appInfo.data_root}>
@@ -287,6 +292,19 @@
   .settings:hover {
     background: var(--bg-hover);
     color: var(--fg);
+  }
+  .ico {
+    display: inline-grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    font-size: 14px;
+    line-height: 1;
+  }
+  /* The text-style gear (FE0E keeps it from turning into an emoji on Windows) is drawn
+     smaller than ◎ and ⚒ at the same font size. */
+  .ico.gear {
+    font-size: 17px;
   }
   .status {
     font-size: 11.5px;
