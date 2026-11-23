@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use agent_core::agent::launcher::RunServices;
 use agent_core::agent::RunCoordinator;
 use agent_core::config::{resolve_data_root, DataRoot};
 use agent_core::mcp::{McpManager, McpStore, PermissionScope, ScopePolicies};
@@ -81,15 +82,12 @@ fn prune_orphaned_scopes(mcp: &McpManager, db: &Db) {
     }
 }
 
+/// Host-only handles plus the `RunServices` shared with the run launcher; commands read
+/// stores through `services`, so there is a single copy of each.
 pub struct AppState {
     pub data_root: DataRoot,
-    pub coordinator: Arc<RunCoordinator>,
     pub secrets: Arc<dyn SecretStore>,
-    pub providers: ProviderStore,
-    pub settings: SettingsStore,
-    pub mcp: Arc<McpManager>,
-    pub db: Db,
-    pub attachments: Arc<AttachmentStore>,
+    pub services: RunServices,
 }
 
 impl AppState {
@@ -105,8 +103,8 @@ impl AppState {
         // Separate pools for providers and remote MCP servers; both are redirect-free so
         // custom credential headers can't leak to a redirect target.
         let http = agent_core::http::client()?;
-        let providers = ProviderStore::load(&data_root, secrets.clone(), http)?;
-        let settings = SettingsStore::load(&data_root)?;
+        let providers = Arc::new(ProviderStore::load(&data_root, secrets.clone(), http)?);
+        let settings = Arc::new(SettingsStore::load(&data_root)?);
         let db = Db::open(&data_root.database_path())?;
         let attachments = Arc::new(AttachmentStore::new(data_root.attachments_dir()));
         let handle = app.clone();
@@ -122,16 +120,18 @@ impl AppState {
         prune_orphaned_scopes(&mcp, &db);
         Ok(Self {
             data_root,
-            coordinator: RunCoordinator::new(
-                MAX_CONCURRENT_RUNS,
-                tauri::async_runtime::handle().inner().clone(),
-            ),
             secrets,
-            providers,
-            settings,
-            mcp,
-            db,
-            attachments,
+            services: RunServices {
+                db,
+                providers,
+                attachments,
+                mcp,
+                coordinator: RunCoordinator::new(
+                    MAX_CONCURRENT_RUNS,
+                    tauri::async_runtime::handle().inner().clone(),
+                ),
+                settings,
+            },
         })
     }
 }
