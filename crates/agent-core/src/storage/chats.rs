@@ -425,9 +425,77 @@ pub fn append_message(
     attachment_ids: &[String],
 ) -> Result<String> {
     let tx = conn.transaction().map_err(sql_err)?;
+    let id = insert_message(&tx, chat_id, role, blocks, attachment_ids)?;
+    tx.commit().map_err(sql_err)?;
+    Ok(id)
+}
+
+/// Whether a reply in the chat is still being generated — by this process or another one
+/// sharing the database (or left by a process that died; see `recover_interrupted`).
+pub fn has_streaming(conn: &Connection, chat_id: ChatId) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE chat_id = ?1 AND status = 'streaming')",
+        params![chat_id.to_string()],
+        |r| r.get(0),
+    )
+    .map_err(sql_err)
+}
+
+/// The stored status of one message, or `None` if it no longer exists. How a host learns a
+/// run's durable outcome: read after the terminal event, it is queued behind the run's final
+/// write (see `launcher::launch`).
+pub fn message_status(conn: &Connection, message_id: &str) -> Result<Option<MessageStatus>> {
+    conn.query_row(
+        "SELECT status FROM messages WHERE id = ?1",
+        params![message_id],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(sql_err)
+    .map(|s| s.map(|s| MessageStatus::parse(&s)))
+}
+
+/// Stores a new turn in one write transaction: after a retry's truncation, the user message
+/// and the assistant placeholder the run streams into. Rejected with `RunBusy`, before
+/// anything changes, while another reply in the chat is streaming; SQLite serializes
+/// writers, so of two processes (or two launches in one) starting a turn in the same chat
+/// exactly one gets it. Returns `(user message id, assistant message id)`.
+#[allow(clippy::too_many_arguments)]
+pub fn start_turn(
+    conn: &mut Connection,
+    chat_id: ChatId,
+    replace_from: Option<&str>,
+    blocks: &[ContentBlock],
+    attachment_ids: &[String],
+    run_id: RunId,
+    provider_id: &str,
+    model: &str,
+) -> Result<(String, String)> {
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(sql_err)?;
+    if has_streaming(&tx, chat_id)? {
+        return Err(Error::RunBusy);
+    }
+    if let Some(from) = replace_from {
+        truncate_from(&tx, chat_id, from)?;
+    }
+    let user = insert_message(&tx, chat_id, Role::User, blocks, attachment_ids)?;
+    let assistant = insert_placeholder(&tx, chat_id, run_id, provider_id, model)?;
+    tx.commit().map_err(sql_err)?;
+    Ok((user, assistant))
+}
+
+fn insert_message(
+    tx: &Connection,
+    chat_id: ChatId,
+    role: Role,
+    blocks: &[ContentBlock],
+    attachment_ids: &[String],
+) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
-    let seq = next_seq(&tx, chat_id)?;
+    let seq = next_seq(tx, chat_id)?;
     tx.execute(
         "INSERT INTO messages (id, chat_id, seq, role, blocks, status, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, 'complete', ?6, ?6)",
@@ -474,7 +542,6 @@ pub fn append_message(
         params![chat_id.to_string(), now],
     )
     .map_err(sql_err)?;
-    tx.commit().map_err(sql_err)?;
     Ok(id)
 }
 
@@ -487,9 +554,21 @@ pub fn begin_assistant_message(
     model: &str,
 ) -> Result<String> {
     let tx = conn.transaction().map_err(sql_err)?;
+    let id = insert_placeholder(&tx, chat_id, run_id, provider_id, model)?;
+    tx.commit().map_err(sql_err)?;
+    Ok(id)
+}
+
+fn insert_placeholder(
+    tx: &Connection,
+    chat_id: ChatId,
+    run_id: RunId,
+    provider_id: &str,
+    model: &str,
+) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
-    let seq = next_seq(&tx, chat_id)?;
+    let seq = next_seq(tx, chat_id)?;
     tx.execute(
         "INSERT INTO messages (id, chat_id, seq, role, blocks, status, model, run_id, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'assistant', '[]', 'streaming', ?4, ?5, ?6, ?6)",
@@ -501,7 +580,6 @@ pub fn begin_assistant_message(
         params![chat_id.to_string(), provider_id, model, now],
     )
     .map_err(sql_err)?;
-    tx.commit().map_err(sql_err)?;
     Ok(id)
 }
 
@@ -564,6 +642,23 @@ mod tests {
         c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         super::super::migrations::apply(&mut c).unwrap();
         c
+    }
+
+    #[test]
+    fn message_status_reads_one_row() {
+        let mut c = conn();
+        let chat = create_chat(&c, "x").unwrap();
+        let id = begin_assistant_message(&mut c, chat.id, RunId::new(), "p", "m").unwrap();
+        assert_eq!(
+            message_status(&c, &id).unwrap(),
+            Some(MessageStatus::Streaming)
+        );
+        finalize_assistant_message(&c, &id, &[], MessageStatus::Cancelled, None, None).unwrap();
+        assert_eq!(
+            message_status(&c, &id).unwrap(),
+            Some(MessageStatus::Cancelled)
+        );
+        assert_eq!(message_status(&c, "missing").unwrap(), None);
     }
 
     #[test]

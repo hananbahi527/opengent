@@ -28,6 +28,15 @@ Contributor guidelines: see CONTRIBUTING.md. Security scope: SECURITY.md.
   (owned by `AppState`) and a `RunSink`; startup policy (opening the DB, connecting MCP, runtime) stays in the host.
 - `src-tauri` – Tauri host: `AppState`, IPC commands, capabilities, CSP, the sinks and app events. `start_run` and
   `scheduler::fire` are thin callers of `launcher::launch`.
+- `crates/cli` – the `opengent` binary (package `opengent-cli`; bin name literal, a test checks it equals the slug).
+  First-party arg parsing, no new deps. It shares the data root with a running app: every host opens the database with
+  `Db::open_root` (process lock — only a process that is alone migrates and runs `recover_interrupted`; others need
+  the exact schema) and the CLI loads `ProviderStore`/`McpStore`/`SettingsStore` with `load_read_only` (no writes, no
+  pins, no accepted instructions). "One run per chat" is enforced in the database by `chats::start_turn`.
+  Results go to stdout only through `term::out` (never `print!`: it panics on a closed pipe), everything else through
+  `term::note`; untrusted text shown on a terminal passes `term::sanitize`. A run's exit code comes from the stored
+  reply (`chats::message_status`), and `run::Interrupt` (Ctrl-C, SIGTERM, SIGHUP) must be listening before anything is
+  spawned or stored. Logs go to stderr at `warn` unless `OPENGENT_LOG` (`config::log_env_var`, shared with the app) is set.
 - `src` – Svelte frontend. `src/lib/generated/bindings` are ts-rs outputs from Rust DTOs (committed; CI checks drift).
 
 ## Commands
@@ -36,6 +45,8 @@ Contributor guidelines: see CONTRIBUTING.md. Security scope: SECURITY.md.
 - `npm run tauri:dev` – run the desktop app (generates product artifacts first).
 - `npm run tauri:build` – release bundle (unsigned unless signing is configured). Only when asked; see Workflow.
 - `npm run verify` – svelte-check, vitest, cargo fmt/clippy/test.
+- `cargo build -p opengent-cli` – the CLI (`target/debug/opengent help`); `OPENGENT_DATA_DIR=/tmp/og` points it (and
+  the app) at a scratch data root. `crates/cli/tests/cli.rs` drives the real binary against in-process model/MCP mocks.
 - CI (`.github/workflows/ci.yml`): PRs run `verify`'s checks, the bindings drift check and `npm run build` on macOS +
   Windows; the release-profile `tauri:build -- --no-bundle` runs only on pushes to `main` (`release-build` job).
   The Rust cache is saved from `main` only.
@@ -120,3 +131,5 @@ Contributor guidelines: see CONTRIBUTING.md. Security scope: SECURITY.md.
   works / limits, plus its "At a glance" row — no code paths or change history) and add an entry under *Unreleased*
   in `CHANGELOG.md` (Added / Changed / Fixed / Security, prefixed with the area); move shipped roadmap items out of
   README "Proposed features". A new or changed provider also updates the SECURITY.md data-handling table.
+  A change to the CLI's commands, options, output, exit codes or environment variables also updates `docs/cli.md`
+  (the user guide: install, usage, scripting, troubleshooting) and the usage text in `crates/cli/src/main.rs`.

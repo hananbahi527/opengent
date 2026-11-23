@@ -28,6 +28,11 @@ impl DataRoot {
     pub fn database_path(&self) -> PathBuf {
         self.path.join("data.sqlite3")
     }
+
+    /// Every process using this data root holds a lock on this file (see `ProcessLock`).
+    pub fn lock_path(&self) -> PathBuf {
+        self.path.join("process.lock")
+    }
 }
 
 /// Name of the environment variable that overrides the data root, derived from the product slug
@@ -35,6 +40,15 @@ impl DataRoot {
 pub fn data_dir_env_var() -> String {
     format!(
         "{}_DATA_DIR",
+        product().slug.to_ascii_uppercase().replace('-', "_")
+    )
+}
+
+/// Name of the environment variable holding a host's tracing filter (e.g. `OPENGENT_LOG`),
+/// derived from the product slug like `data_dir_env_var`. Every host reads the same one.
+pub fn log_env_var() -> String {
+    format!(
+        "{}_LOG",
         product().slug.to_ascii_uppercase().replace('-', "_")
     )
 }
